@@ -17,11 +17,11 @@
 #include <vector>
 
 #include "absl/memory/memory.h"
+#include "api/rtc_event_log_output_file.h"
 #include "api/task_queue/default_task_queue_factory.h"
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "call/fake_network_pipe.h"
 #include "call/simulated_network.h"
-#include "logging/rtc_event_log/output/rtc_event_log_output_file.h"
 #include "media/engine/adm_helpers.h"
 #include "media/engine/encoder_simulcast_proxy.h"
 #include "media/engine/fake_video_codec_factory.h"
@@ -128,6 +128,7 @@ class QualityTestVideoEncoder : public VideoEncoder,
           IvfFileWriter::Wrap(std::move(file), /* byte_limit= */ 100000000));
     }
   }
+
   // Implement VideoEncoder
   int32_t InitEncode(const VideoCodec* codec_settings,
                      int32_t number_of_cores,
@@ -136,12 +137,15 @@ class QualityTestVideoEncoder : public VideoEncoder,
     return encoder_->InitEncode(codec_settings, number_of_cores,
                                 max_payload_size);
   }
+
   int32_t RegisterEncodeCompleteCallback(
       EncodedImageCallback* callback) override {
     callback_ = callback;
     return encoder_->RegisterEncodeCompleteCallback(this);
   }
+
   int32_t Release() override { return encoder_->Release(); }
+
   int32_t Encode(const VideoFrame& frame,
                  const std::vector<VideoFrameType>* frame_types) {
     if (analyzer_) {
@@ -149,6 +153,7 @@ class QualityTestVideoEncoder : public VideoEncoder,
     }
     return encoder_->Encode(frame, frame_types);
   }
+
   void SetRates(const RateControlParameters& parameters) override {
     RTC_DCHECK_GT(overshoot_factor_, 0.0);
     if (overshoot_factor_ == 1.0) {
@@ -194,6 +199,17 @@ class QualityTestVideoEncoder : public VideoEncoder,
         RateControlParameters(overshot_allocation, parameters.framerate_fps,
                               parameters.bandwidth_allocation));
   }
+
+  void OnPacketLossRateUpdate(float packet_loss_rate) override {
+    encoder_->OnPacketLossRateUpdate(packet_loss_rate);
+  }
+
+  void OnRttUpdate(int64_t rtt_ms) override { encoder_->OnRttUpdate(rtt_ms); }
+
+  void OnLossNotification(const LossNotification& loss_notification) override {
+    encoder_->OnLossNotification(loss_notification);
+  }
+
   EncoderInfo GetEncoderInfo() const override {
     EncoderInfo info = encoder_->GetEncoderInfo();
     if (overshoot_factor_ != 1.0) {
@@ -363,6 +379,8 @@ VideoQualityTest::VideoQualityTest(
       std::move(injection_components_->fec_controller_factory);
   network_state_predictor_factory_ =
       std::move(injection_components_->network_state_predictor_factory);
+  network_controller_factory_ =
+      std::move(injection_components_->network_controller_factory);
 }
 
 VideoQualityTest::Params::Params()

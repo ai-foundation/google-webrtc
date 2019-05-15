@@ -179,6 +179,12 @@ class PeerConnectionE2EQualityTest
                rtc::FunctionView<void(PeerConfigurer*)> configurer) override;
   void Run(RunParams run_params) override;
 
+  TimeDelta GetRealTestDuration() const override {
+    rtc::CritScope crit(&lock_);
+    RTC_CHECK_NE(real_test_duration_, TimeDelta::Zero());
+    return real_test_duration_;
+  }
+
  private:
   struct ScheduledActivity {
     ScheduledActivity(TimeDelta initial_delay_since_start,
@@ -205,7 +211,7 @@ class PeerConnectionE2EQualityTest
   void OnTrackCallback(rtc::scoped_refptr<RtpTransceiverInterface> transceiver,
                        std::vector<VideoConfig> remote_video_configs);
   // Have to be run on the signaling thread.
-  void SetupCallOnSignalingThread();
+  void SetupCallOnSignalingThread(const RunParams& run_params);
   void TearDownCallOnSignalingThread();
   std::vector<rtc::scoped_refptr<FrameGeneratorCapturerVideoTrackSource>>
   MaybeAddMedia(TestPeer* peer);
@@ -213,7 +219,10 @@ class PeerConnectionE2EQualityTest
   MaybeAddVideo(TestPeer* peer);
   std::unique_ptr<test::FrameGenerator> CreateFrameGenerator(
       const VideoConfig& video_config);
+  std::unique_ptr<test::FrameGenerator> CreateScreenShareFrameGenerator(
+      const VideoConfig& video_config);
   void MaybeAddAudio(TestPeer* peer);
+  void SetPeerCodecPreferences(TestPeer* peer, const RunParams& run_params);
   void SetupCall();
   void StartVideo(
       const std::vector<
@@ -253,6 +262,7 @@ class PeerConnectionE2EQualityTest
   // Time when test call was started. Minus infinity means that call wasn't
   // started yet.
   Timestamp start_time_ RTC_GUARDED_BY(lock_) = Timestamp::MinusInfinity();
+  TimeDelta real_test_duration_ RTC_GUARDED_BY(lock_) = TimeDelta::Zero();
   // Queue of activities that were added before test call was started.
   // Activities from this queue will be posted on the |task_queue_| after test
   // call will be set up and then this queue will be unused.

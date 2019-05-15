@@ -77,18 +77,23 @@ void SctpTransport::Clear() {
 void SctpTransport::SetDtlsTransport(
     rtc::scoped_refptr<DtlsTransport> transport) {
   RTC_DCHECK_RUN_ON(owner_thread_);
-  rtc::CritScope scope(&lock_);
-  dtls_transport_ = transport;
-  if (internal_sctp_transport_) {
-    if (transport) {
-      internal_sctp_transport_->SetDtlsTransport(transport->internal());
-      if (info_.state() == SctpTransportState::kNew) {
-        UpdateInformation(SctpTransportState::kConnecting);
+  SctpTransportState next_state;
+  {
+    rtc::CritScope scope(&lock_);
+    next_state = info_.state();
+    dtls_transport_ = transport;
+    if (internal_sctp_transport_) {
+      if (transport) {
+        internal_sctp_transport_->SetDtlsTransport(transport->internal());
+        if (info_.state() == SctpTransportState::kNew) {
+          next_state = SctpTransportState::kConnecting;
+        }
+      } else {
+        internal_sctp_transport_->SetDtlsTransport(nullptr);
       }
-    } else {
-      internal_sctp_transport_->SetDtlsTransport(nullptr);
     }
   }
+  UpdateInformation(next_state);
 }
 
 void SctpTransport::UpdateInformation(SctpTransportState state) {
@@ -100,8 +105,14 @@ void SctpTransport::UpdateInformation(SctpTransportState state) {
     must_send_update = (state != info_.state());
     // TODO(https://bugs.webrtc.org/10358): Update max message size and
     // max channels from internal SCTP transport when available.
-    info_ = SctpTransportInformation(
-        state, dtls_transport_, info_.MaxMessageSize(), info_.MaxChannels());
+    if (internal_sctp_transport_) {
+      info_ = SctpTransportInformation(
+          state, dtls_transport_, internal_sctp_transport_->max_message_size(),
+          info_.MaxChannels());
+    } else {
+      info_ = SctpTransportInformation(
+          state, dtls_transport_, info_.MaxMessageSize(), info_.MaxChannels());
+    }
     if (observer_ && must_send_update) {
       info_copy = info_;
     }

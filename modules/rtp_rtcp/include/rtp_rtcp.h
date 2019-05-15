@@ -260,11 +260,12 @@ class RtpRtcp : public Module, public RtcpFeedbackSenderInterface {
                                  int payload_type,
                                  bool force_sender_report) = 0;
 
-  virtual bool TimeToSendPacket(uint32_t ssrc,
-                                uint16_t sequence_number,
-                                int64_t capture_time_ms,
-                                bool retransmission,
-                                const PacedPacketInfo& pacing_info) = 0;
+  virtual RtpPacketSendResult TimeToSendPacket(
+      uint32_t ssrc,
+      uint16_t sequence_number,
+      int64_t capture_time_ms,
+      bool retransmission,
+      const PacedPacketInfo& pacing_info) = 0;
 
   virtual size_t TimeToSendPadding(size_t bytes,
                                    const PacedPacketInfo& pacing_info) = 0;
@@ -273,6 +274,11 @@ class RtpRtcp : public Module, public RtcpFeedbackSenderInterface {
   virtual void RegisterSendChannelRtpStatisticsCallback(
       StreamDataCountersCallback* callback) = 0;
   virtual StreamDataCountersCallback* GetSendChannelRtpStatisticsCallback()
+      const = 0;
+
+  // Returns a pointer to an observer that handles information about packets
+  // that have been received by the remote end, or nullptr if not applicable.
+  virtual AcknowledgedPacketsObserver* GetAcknowledgedPacketsObserver()
       const = 0;
 
   // **************************************************************************

@@ -146,7 +146,7 @@ class RtpVideoSender : public RtpVideoSenderInterface,
       rtc::ArrayView<const uint16_t> sequence_numbers) const override;
 
   // From PacketFeedbackObserver.
-  void OnPacketAdded(uint32_t ssrc, uint16_t seq_num) override;
+  void OnPacketAdded(uint32_t ssrc, uint16_t seq_num) override {}
   void OnPacketFeedbackVector(
       const std::vector<PacketFeedback>& packet_feedback_vector) override;
 
@@ -172,7 +172,7 @@ class RtpVideoSender : public RtpVideoSenderInterface,
   std::map<uint32_t, RtpState> suspended_ssrcs_;
 
   std::unique_ptr<FlexfecSender> flexfec_sender_;
-  std::unique_ptr<FecController> fec_controller_;
+  const std::unique_ptr<FecController> fec_controller_;
   // Rtp modules are assumed to be sorted in simulcast index order.
   const std::vector<webrtc_internal_rtp_video_sender::RtpStreamSender>
       rtp_streams_;
@@ -191,11 +191,16 @@ class RtpVideoSender : public RtpVideoSenderInterface,
   uint32_t protection_bitrate_bps_;
   uint32_t encoder_target_rate_bps_;
 
-  std::unordered_set<uint16_t> feedback_packet_seq_num_set_;
   std::vector<bool> loss_mask_vector_ RTC_GUARDED_BY(crit_);
 
   std::vector<FrameCounts> frame_counts_ RTC_GUARDED_BY(crit_);
   FrameCountObserver* const frame_count_observer_;
+
+  // Effectively const map from ssrc to AcknowledgedPacketsObserver. This
+  // map is set at construction time and never changed, but it's
+  // non-trivial to make it properly const.
+  std::map<uint32_t, AcknowledgedPacketsObserver*>
+      ssrc_to_acknowledged_packets_observers_;
 
   RTC_DISALLOW_COPY_AND_ASSIGN(RtpVideoSender);
 };

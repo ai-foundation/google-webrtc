@@ -586,16 +586,6 @@ bool WebRtcVoiceEngine::StartAecDump(rtc::PlatformFile file,
   return true;
 }
 
-void WebRtcVoiceEngine::StartAecDump(const std::string& filename) {
-  RTC_DCHECK(worker_thread_checker_.IsCurrent());
-
-  auto aec_dump = webrtc::AecDumpFactory::Create(
-      filename, -1, low_priority_worker_queue_.get());
-  if (aec_dump) {
-    apm()->AttachAecDump(std::move(aec_dump));
-  }
-}
-
 void WebRtcVoiceEngine::StopAecDump() {
   RTC_DCHECK(worker_thread_checker_.IsCurrent());
   apm()->DetachAecDump();
@@ -977,10 +967,27 @@ class WebRtcVoiceMediaChannel::WebRtcAudioSendStream
         config_.send_codec_spec &&
         absl::EqualsIgnoreCase(config_.send_codec_spec->format.name,
                                kOpusCodecName);
-    if (is_opus && allocation_settings_.ConfigureRateAllocationRange()) {
-      config_.min_bitrate_bps = allocation_settings_.MinBitrateBps();
-      config_.max_bitrate_bps = allocation_settings_.MaxBitrateBps(
-          rtp_parameters_.encodings[0].max_bitrate_bps);
+    if (is_opus) {
+      // The order of precedence, from lowest to highest is:
+      // - a reasonable default of 32kbps min/max
+      // - fixed target bitrate from codec spec
+      // - bitrate configured in the rtp_parameter encodings settings
+      const int kDefaultBitrateBps = 32000;
+      config_.min_bitrate_bps = kDefaultBitrateBps;
+      config_.max_bitrate_bps = kDefaultBitrateBps;
+
+      if (config_.send_codec_spec &&
+          config_.send_codec_spec->target_bitrate_bps) {
+        config_.min_bitrate_bps = *config_.send_codec_spec->target_bitrate_bps;
+        config_.max_bitrate_bps = *config_.send_codec_spec->target_bitrate_bps;
+      }
+
+      if (rtp_parameters_.encodings[0].min_bitrate_bps) {
+        config_.min_bitrate_bps = *rtp_parameters_.encodings[0].min_bitrate_bps;
+      }
+      if (rtp_parameters_.encodings[0].max_bitrate_bps) {
+        config_.max_bitrate_bps = *rtp_parameters_.encodings[0].max_bitrate_bps;
+      }
     }
   }
 
@@ -2236,6 +2243,8 @@ bool WebRtcVoiceMediaChannel::GetStats(VoiceMediaInfo* info) {
     rinfo.add_ssrc(stats.remote_ssrc);
     rinfo.bytes_rcvd = stats.bytes_rcvd;
     rinfo.packets_rcvd = stats.packets_rcvd;
+    rinfo.fec_packets_received = stats.fec_packets_received;
+    rinfo.fec_packets_discarded = stats.fec_packets_discarded;
     rinfo.packets_lost = stats.packets_lost;
     rinfo.fraction_lost = stats.fraction_lost;
     rinfo.codec_name = stats.codec_name;
@@ -2250,9 +2259,14 @@ bool WebRtcVoiceMediaChannel::GetStats(VoiceMediaInfo* info) {
     rinfo.total_samples_received = stats.total_samples_received;
     rinfo.total_output_duration = stats.total_output_duration;
     rinfo.concealed_samples = stats.concealed_samples;
+    rinfo.silent_concealed_samples = stats.silent_concealed_samples;
     rinfo.concealment_events = stats.concealment_events;
     rinfo.jitter_buffer_delay_seconds = stats.jitter_buffer_delay_seconds;
     rinfo.jitter_buffer_emitted_count = stats.jitter_buffer_emitted_count;
+    rinfo.inserted_samples_for_deceleration =
+        stats.inserted_samples_for_deceleration;
+    rinfo.removed_samples_for_acceleration =
+        stats.removed_samples_for_acceleration;
     rinfo.expand_rate = stats.expand_rate;
     rinfo.speech_expand_rate = stats.speech_expand_rate;
     rinfo.secondary_decoded_rate = stats.secondary_decoded_rate;

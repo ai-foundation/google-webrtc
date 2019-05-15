@@ -664,6 +664,10 @@ class RTC_EXPORT PeerConnectionInterface : public rtc::RefCountInterface {
     // This will apply to all video tracks with a Plan B SDP offer/answer.
     int num_simulcast_layers = 1;
 
+    // If true: Use SDP format from draft-ietf-mmusic-scdp-sdp-03
+    // If false: Use SDP format from draft-ietf-mmusic-sdp-sdp-26 or later
+    bool use_obsolete_sctp_sdp = false;
+
     RTCOfferAnswerOptions() = default;
 
     RTCOfferAnswerOptions(int offer_to_receive_video,
@@ -1074,8 +1078,14 @@ class RTC_EXPORT PeerConnectionInterface : public rtc::RefCountInterface {
   // |output| and passes it on to Call, which will take the ownership. If the
   // operation fails the output will be closed and deallocated. The event log
   // will send serialized events to the output object every |output_period_ms|.
+  // Applications using the event log should generally make their own trade-off
+  // regarding the output period. A long period is generally more efficient,
+  // with potential drawbacks being more bursty thread usage, and more events
+  // lost in case the application crashes. If the |output_period_ms| argument is
+  // omitted, webrtc selects a default deemed to be workable in most cases.
   virtual bool StartRtcEventLog(std::unique_ptr<RtcEventLogOutput> output,
                                 int64_t output_period_ms);
+  virtual bool StartRtcEventLog(std::unique_ptr<RtcEventLogOutput> output);
 
   // Stops logging the RtcEventLog.
   // TODO(ivoc): Make this pure virtual when Chrome is updated.

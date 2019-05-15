@@ -25,12 +25,12 @@
 #include "api/media_stream_proxy.h"
 #include "api/media_stream_track_proxy.h"
 #include "api/rtc_error.h"
+#include "api/rtc_event_log_output_file.h"
 #include "api/rtp_parameters.h"
 #include "api/uma_metrics.h"
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "call/call.h"
 #include "logging/rtc_event_log/ice_logger.h"
-#include "logging/rtc_event_log/output/rtc_event_log_output_file.h"
 #include "logging/rtc_event_log/rtc_event_log.h"
 #include "media/base/rid_description.h"
 #include "media/sctp/sctp_transport.h"
@@ -554,29 +554,6 @@ bool VerifyIceUfragPwdPresent(const SessionDescription* desc) {
     }
   }
   return true;
-}
-
-// Get the SCTP port out of a SessionDescription.
-// Return -1 if not found.
-int GetSctpPort(const SessionDescription* session_description) {
-  const cricket::DataContentDescription* data_desc =
-      GetFirstDataContentDescription(session_description);
-  RTC_DCHECK(data_desc);
-  if (!data_desc) {
-    return -1;
-  }
-  std::string value;
-  cricket::DataCodec match_pattern(cricket::kGoogleSctpDataCodecPlType,
-                                   cricket::kGoogleSctpDataCodecName);
-  for (const cricket::DataCodec& codec : data_desc->codecs()) {
-    if (!codec.Matches(match_pattern)) {
-      continue;
-    }
-    if (codec.GetParam(cricket::kCodecParamPort, &value)) {
-      return rtc::FromString<int>(value);
-    }
-  }
-  return -1;
 }
 
 // Returns true if |new_desc| requests an ICE restart (i.e., new ufrag/pwd).
@@ -1703,7 +1680,8 @@ PeerConnection::CreateAndAddTransceiver(
   // could be invalid, but should not cause a crash).
   RTC_DCHECK(!FindSenderById(sender->id()));
   auto transceiver = RtpTransceiverProxyWithInternal<RtpTransceiver>::Create(
-      signaling_thread(), new RtpTransceiver(sender, receiver));
+      signaling_thread(),
+      new RtpTransceiver(sender, receiver, channel_manager()));
   transceivers_.push_back(transceiver);
   transceiver->internal()->SignalNegotiationNeeded.connect(
       this, &PeerConnection::OnNegotiationNeeded);
@@ -2422,11 +2400,11 @@ RTCError PeerConnection::ApplyLocalDescription(
   const cricket::ContentInfo* data_content =
       GetFirstDataContent(local_description()->description());
   if (data_content) {
-    const cricket::DataContentDescription* data_desc =
-        data_content->media_description()->as_data();
-    if (absl::StartsWith(data_desc->protocol(),
-                         cricket::kMediaProtocolRtpPrefix)) {
-      UpdateLocalRtpDataChannels(data_desc->streams());
+    const cricket::RtpDataContentDescription* rtp_data_desc =
+        data_content->media_description()->as_rtp_data();
+    // rtp_data_desc will be null if this is an SCTP description.
+    if (rtp_data_desc) {
+      UpdateLocalRtpDataChannels(rtp_data_desc->streams());
     }
   }
 
@@ -2832,8 +2810,8 @@ RTCError PeerConnection::ApplyRemoteDescription(
       GetFirstAudioContentDescription(remote_description()->description());
   const cricket::VideoContentDescription* video_desc =
       GetFirstVideoContentDescription(remote_description()->description());
-  const cricket::DataContentDescription* data_desc =
-      GetFirstDataContentDescription(remote_description()->description());
+  const cricket::RtpDataContentDescription* rtp_data_desc =
+      GetFirstRtpDataContentDescription(remote_description()->description());
 
   // Check if the descriptions include streams, just in case the peer supports
   // MSID, but doesn't indicate so with "a=msid-semantic".
@@ -2886,12 +2864,10 @@ RTCError PeerConnection::ApplyRemoteDescription(
       }
     }
 
-    // Update the DataChannels with the information from the remote peer.
-    if (data_desc) {
-      if (absl::StartsWith(data_desc->protocol(),
-                           cricket::kMediaProtocolRtpPrefix)) {
-        UpdateRemoteRtpDataChannels(GetActiveStreams(data_desc));
-      }
+    // If this is an RTP data transport, update the DataChannels with the
+    // information from the remote peer.
+    if (rtp_data_desc) {
+      UpdateRemoteRtpDataChannels(GetActiveStreams(rtp_data_desc));
     }
 
     // Iterate new_streams and notify the observer about new MediaStreams.
@@ -3790,6 +3766,12 @@ bool PeerConnection::StartRtcEventLog(std::unique_ptr<RtcEventLogOutput> output,
       RTC_FROM_HERE, Functor{this, std::move(output), output_period_ms});
 }
 
+bool PeerConnection::StartRtcEventLog(
+    std::unique_ptr<RtcEventLogOutput> output) {
+  return StartRtcEventLog(std::move(output),
+                          webrtc::RtcEventLog::kImmediateOutput);
+}
+
 void PeerConnection::StopRtcEventLog() {
   worker_thread()->Invoke<void>(
       RTC_FROM_HERE, rtc::Bind(&PeerConnection::StopRtcEventLog_w, this));
@@ -4305,6 +4287,11 @@ void PeerConnection::GetOptionsForOffer(
     session_options->media_transport_settings =
         transport_controller_->GenerateOrGetLastMediaTransportOffer();
   }
+  // Allow fallback for using obsolete SCTP syntax.
+  // Note that the default in |session_options| is true, while
+  // the default in |options| is false.
+  session_options->use_obsolete_sctp_sdp =
+      offer_answer_options.use_obsolete_sctp_sdp;
 }
 
 void PeerConnection::GetOptionsForPlanBOffer(
@@ -4397,6 +4384,8 @@ GetMediaDescriptionOptionsForTransceiver(
   cricket::MediaDescriptionOptions media_description_options(
       transceiver->media_type(), mid, transceiver->direction(),
       transceiver->stopped());
+  media_description_options.codec_preferences =
+      transceiver->codec_preferences();
   // This behavior is specified in JSEP. The gist is that:
   // 1. The MSID is included if the RtpTransceiver's direction is sendonly or
   //    sendrecv.
@@ -5662,17 +5651,24 @@ RTCError PeerConnection::PushdownMediaDescription(
 
   // Need complete offer/answer with an SCTP m= section before starting SCTP,
   // according to https://tools.ietf.org/html/draft-ietf-mmusic-sctp-sdp-19
-  if (sctp_transport_ && local_description() && remote_description() &&
-      cricket::GetFirstDataContent(local_description()->description()) &&
-      cricket::GetFirstDataContent(remote_description()->description())) {
-    bool success = network_thread()->Invoke<bool>(
-        RTC_FROM_HERE,
-        rtc::Bind(&PeerConnection::PushdownSctpParameters_n, this, source,
-                  GetSctpPort(local_description()->description()),
-                  GetSctpPort(remote_description()->description())));
-    if (!success) {
-      LOG_AND_RETURN_ERROR(RTCErrorType::INTERNAL_ERROR,
-                           "Failed to push down SCTP parameters.");
+  if (sctp_transport_ && local_description() && remote_description()) {
+    auto local_sctp_description = cricket::GetFirstSctpDataContentDescription(
+        local_description()->description());
+    auto remote_sctp_description = cricket::GetFirstSctpDataContentDescription(
+        remote_description()->description());
+    if (local_sctp_description && remote_sctp_description) {
+      int max_message_size =
+          std::min(local_sctp_description->max_message_size(),
+                   remote_sctp_description->max_message_size());
+      bool success = network_thread()->Invoke<bool>(
+          RTC_FROM_HERE,
+          rtc::Bind(&PeerConnection::PushdownSctpParameters_n, this, source,
+                    local_sctp_description->port(),
+                    remote_sctp_description->port(), max_message_size));
+      if (!success) {
+        LOG_AND_RETURN_ERROR(RTCErrorType::INTERNAL_ERROR,
+                             "Failed to push down SCTP parameters.");
+      }
     }
   }
 
@@ -5681,11 +5677,13 @@ RTCError PeerConnection::PushdownMediaDescription(
 
 bool PeerConnection::PushdownSctpParameters_n(cricket::ContentSource source,
                                               int local_sctp_port,
-                                              int remote_sctp_port) {
+                                              int remote_sctp_port,
+                                              int max_message_size) {
   RTC_DCHECK_RUN_ON(network_thread());
   // Apply the SCTP port (which is hidden inside a DataCodec structure...)
   // When we support "max-message-size", that would also be pushed down here.
-  return cricket_sctp_transport()->Start(local_sctp_port, remote_sctp_port);
+  return cricket_sctp_transport()->Start(local_sctp_port, remote_sctp_port,
+                                         max_message_size);
 }
 
 RTCError PeerConnection::PushdownTransportDescription(

@@ -47,6 +47,7 @@ class RtpPacketHistory {
     size_t packet_size = 0;
     // Number of times RE-transmitted, ie not including the first transmission.
     size_t times_retransmitted = 0;
+    bool pending_transmission = false;
   };
 
   // Maximum number of packets we ever allow in the history.
@@ -89,6 +90,14 @@ class RtpPacketHistory {
   std::unique_ptr<RtpPacketToSend> GetBestFittingPacket(
       size_t packet_size) const;
 
+  // Cull packets that have been acknowledged as received by the remote end.
+  void CullAcknowledgedPackets(rtc::ArrayView<const uint16_t> sequence_numbers);
+
+  // Mark packet as queued for transmission. This will prevent premature
+  // removal or duplicate retransmissions in the pacer queue.
+  // Returns true if status was set, false if packet was not found.
+  bool SetPendingTransmission(uint16_t sequence_number);
+
  private:
   struct StoredPacket {
     StoredPacket();
@@ -108,6 +117,9 @@ class RtpPacketHistory {
 
     // The actual packet.
     std::unique_ptr<RtpPacketToSend> packet;
+
+    // True if the packet is currently in the pacer queue pending transmission.
+    bool pending_transmission = false;
   };
 
   using StoredPacketIterator = std::map<uint16_t, StoredPacket>::iterator;
@@ -133,6 +145,7 @@ class RtpPacketHistory {
 
   // Map from rtp sequence numbers to stored packet.
   std::map<uint16_t, StoredPacket> packet_history_ RTC_GUARDED_BY(lock_);
+  // Map from packet size to sequence number.
   std::map<size_t, uint16_t> packet_size_ RTC_GUARDED_BY(lock_);
 
   // The earliest packet in the history. This might not be the lowest sequence

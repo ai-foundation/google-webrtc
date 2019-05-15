@@ -35,7 +35,6 @@
 #include "modules/video_coding/include/video_codec_interface.h"
 #include "modules/video_coding/include/video_coding_defines.h"
 #include "modules/video_coding/include/video_error_codes.h"
-#include "modules/video_coding/jitter_estimator.h"
 #include "modules/video_coding/timing.h"
 #include "modules/video_coding/utility/vp8_header_parser.h"
 #include "rtc_base/checks.h"
@@ -241,9 +240,8 @@ VideoReceiveStream::VideoReceiveStream(
 
   timing_->set_render_delay(config_.render_delay_ms);
 
-  jitter_estimator_.reset(new VCMJitterEstimator(clock_));
-  frame_buffer_.reset(new video_coding::FrameBuffer(
-      clock_, jitter_estimator_.get(), timing_.get(), &stats_proxy_));
+  frame_buffer_.reset(
+      new video_coding::FrameBuffer(clock_, timing_.get(), &stats_proxy_));
 
   process_thread_->RegisterModule(&rtp_stream_sync_, RTC_FROM_HERE);
 
@@ -620,10 +618,8 @@ void VideoReceiveStream::StartNextDecode() {
     std::unique_ptr<EncodedFrame> frame;
   };
 
-  // TODO(philipel): Call NextFrame with |keyframe_required| argument set when
-  //                 downstream project has been fixed.
   frame_buffer_->NextFrame(
-      GetWaitMs(), /*keyframe_required*/ false, &decode_queue_,
+      GetWaitMs(), keyframe_required_, &decode_queue_,
       [this](std::unique_ptr<EncodedFrame> frame, ReturnReason res) {
         RTC_DCHECK_EQ(frame == nullptr, res == ReturnReason::kTimeout);
         RTC_DCHECK_EQ(frame != nullptr, res == ReturnReason::kFrameFound);
@@ -642,10 +638,9 @@ bool VideoReceiveStream::Decode() {
   TRACE_EVENT0("webrtc", "VideoReceiveStream::Decode");
 
   std::unique_ptr<video_coding::EncodedFrame> frame;
-  // TODO(philipel): Call NextFrame with |keyframe_required| argument when
-  //                 downstream project has been fixed.
   video_coding::FrameBuffer::ReturnReason res =
-      frame_buffer_->NextFrame(GetWaitMs(), &frame);
+      frame_buffer_->NextFrame(GetWaitMs(), &frame, keyframe_required_);
+
   if (res == ReturnReason::kStopped) {
     return false;
   }

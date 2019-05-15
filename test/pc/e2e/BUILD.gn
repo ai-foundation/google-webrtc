@@ -181,7 +181,6 @@ if (rtc_include_tests) {
       "../../../test:video_test_common",
       "../../../test:video_test_support",
       "//third_party/abseil-cpp/absl/memory",
-      "//third_party/abseil-cpp/absl/strings",
     ]
   }
 
@@ -225,6 +224,7 @@ if (rtc_include_tests) {
   rtc_source_set("peerconnection_quality_test") {
     visibility = [ "*" ]
     testonly = true
+
     sources = [
       "peer_connection_quality_test.cc",
       "peer_connection_quality_test.h",
@@ -234,6 +234,7 @@ if (rtc_include_tests) {
       ":default_audio_quality_analyzer",
       ":default_video_quality_analyzer",
       ":peer_connection_quality_test_params",
+      ":sdp_changer",
       ":single_process_encoded_image_data_injector",
       ":stats_poller",
       ":test_peer",
@@ -241,6 +242,7 @@ if (rtc_include_tests) {
       "../../../api:audio_quality_analyzer_api",
       "../../../api:libjingle_peerconnection_api",
       "../../../api:peer_connection_quality_test_fixture_api",
+      "../../../api:rtc_event_log_output_file",
       "../../../api:scoped_refptr",
       "../../../api:video_quality_analyzer_api",
       "../../../api/task_queue",
@@ -248,8 +250,8 @@ if (rtc_include_tests) {
       "../../../api/units:time_delta",
       "../../../api/units:timestamp",
       "../../../logging:rtc_event_log_api",
-      "../../../logging:rtc_event_log_impl_output",
       "../../../pc:pc_test_utils",
+      "../../../pc:peerconnection",
       "../../../rtc_base",
       "../../../rtc_base:gunit_helpers",
       "../../../rtc_base:rtc_base_approved",
@@ -306,6 +308,7 @@ if (rtc_include_tests) {
 
   rtc_source_set("peer_connection_e2e_smoke_test") {
     testonly = true
+
     sources = [
       "peer_connection_e2e_smoke_test.cc",
     ]
@@ -391,7 +394,6 @@ rtc_source_set("default_audio_quality_analyzer") {
     "../../../rtc_base:criticalsection",
     "../../../rtc_base:logging",
     "../../../rtc_base:rtc_numerics",
-    "//third_party/abseil-cpp/absl/strings",
   ]
 }
 
@@ -414,6 +416,7 @@ rtc_source_set("example_video_quality_analyzer") {
 
 rtc_source_set("default_video_quality_analyzer") {
   visibility = [ "*" ]
+
   testonly = true
   sources = [
     "analyzer/video/default_video_quality_analyzer.cc",
@@ -450,5 +453,19 @@ rtc_source_set("network_quality_metrics_reporter") {
     "../../../api:network_emulation_manager_api",
     "../../../api:peer_connection_quality_test_fixture_api",
     "../../../rtc_base:rtc_event",
+  ]
+}
+
+rtc_source_set("sdp_changer") {
+  testonly = true
+  sources = [
+    "sdp/sdp_changer.cc",
+    "sdp/sdp_changer.h",
+  ]
+  deps = [
+    "../../../api:libjingle_peerconnection_api",
+    "../../../media:rtc_media_base",
+    "../../../rtc_base:stringutils",
+    "//third_party/abseil-cpp/absl/strings:strings",
   ]
 }

@@ -16,7 +16,9 @@
 #include <vector>
 
 #include "absl/strings/string_view.h"
+#include "absl/types/optional.h"
 #include "absl/types/variant.h"
+#include "api/array_view.h"
 #include "api/audio_codecs/audio_format.h"
 #include "api/rtp_headers.h"
 #include "api/transport/network_types.h"
@@ -276,7 +278,7 @@ struct PacketFeedback {
   PacedPacketInfo pacing_info;
 
   // The SSRC and RTP sequence number of the packet this feedback refers to.
-  uint32_t ssrc;
+  absl::optional<uint32_t> ssrc;
   uint16_t rtp_sequence_number;
 };
 
@@ -311,6 +313,17 @@ class TransportFeedbackObserver {
 
   virtual void OnAddPacket(const RtpPacketSendInfo& packet_info) = 0;
   virtual void OnTransportFeedback(const rtcp::TransportFeedback& feedback) = 0;
+};
+
+class AcknowledgedPacketsObserver {
+ public:
+  AcknowledgedPacketsObserver() = default;
+  virtual ~AcknowledgedPacketsObserver() = default;
+
+  // Indicates RTP sequence numbers for packets that have been acknowledged as
+  // received by the remote end.
+  virtual void OnPacketsAcknowledged(
+      rtc::ArrayView<const uint16_t> sequence_numbers) = 0;
 };
 
 // Interface for PacketRouter to send rtcp feedback on behalf of
@@ -501,6 +514,44 @@ class RtcpAckObserver {
   virtual void OnReceivedAck(int64_t extended_highest_sequence_number) = 0;
 
   virtual ~RtcpAckObserver() = default;
+};
+
+// Callback, used to notify an observer whenever new rates have been estimated.
+class BitrateStatisticsObserver {
+ public:
+  virtual ~BitrateStatisticsObserver() {}
+
+  virtual void Notify(uint32_t total_bitrate_bps,
+                      uint32_t retransmit_bitrate_bps,
+                      uint32_t ssrc) = 0;
+};
+
+// Callback, used to notify an observer whenever the send-side delay is updated.
+class SendSideDelayObserver {
+ public:
+  virtual ~SendSideDelayObserver() {}
+  virtual void SendSideDelayUpdated(int avg_delay_ms,
+                                    int max_delay_ms,
+                                    uint32_t ssrc) = 0;
+};
+
+// Callback, used to notify an observer whenever a packet is sent to the
+// transport.
+// TODO(asapersson): This class will remove the need for SendSideDelayObserver.
+// Remove SendSideDelayObserver once possible.
+class SendPacketObserver {
+ public:
+  virtual ~SendPacketObserver() {}
+  virtual void OnSendPacket(uint16_t packet_id,
+                            int64_t capture_time_ms,
+                            uint32_t ssrc) = 0;
+};
+
+// Status returned from TimeToSendPacket() family of callbacks.
+enum class RtpPacketSendResult {
+  kSuccess,               // Packet sent OK.
+  kTransportUnavailable,  // Network unavailable, try again later.
+  kPacketNotFound  // SSRC/sequence number does not map to an available packet.
 };
 
 }  // namespace webrtc

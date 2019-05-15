@@ -42,7 +42,7 @@ class RateLimiter;
 class RtcEventLog;
 class RtpPacketToSend;
 
-class RTPSender {
+class RTPSender : public AcknowledgedPacketsObserver {
  public:
   RTPSender(bool audio,
             Clock* clock,
@@ -103,11 +103,13 @@ class RTPSender {
   bool IsRtpHeaderExtensionRegistered(RTPExtensionType type) const;
   int32_t DeregisterRtpHeaderExtension(RTPExtensionType type);
 
-  bool TimeToSendPacket(uint32_t ssrc,
-                        uint16_t sequence_number,
-                        int64_t capture_time_ms,
-                        bool retransmission,
-                        const PacedPacketInfo& pacing_info);
+  // Returns an RtpPacketSendResult indicating success, network unavailable,
+  // or packet not found.
+  RtpPacketSendResult TimeToSendPacket(uint32_t ssrc,
+                                       uint16_t sequence_number,
+                                       int64_t capture_time_ms,
+                                       bool retransmission,
+                                       const PacedPacketInfo& pacing_info);
   size_t TimeToSendPadding(size_t bytes, const PacedPacketInfo& pacing_info);
 
   // NACK.
@@ -173,6 +175,9 @@ class RTPSender {
 
   void SetRtt(int64_t rtt_ms);
 
+  void OnPacketsAcknowledged(
+      rtc::ArrayView<const uint16_t> sequence_numbers) override;
+
  private:
   // Maps capture time in milliseconds to send-side delay in milliseconds.
   // Send-side delay is the difference between transmission time and capture
@@ -220,7 +225,6 @@ class RTPSender {
   void UpdateRtpOverhead(const RtpPacketToSend& packet);
 
   Clock* const clock_;
-  const int64_t clock_delta_ms_;
   Random random_ RTC_GUARDED_BY(send_critsect_);
 
   const bool audio_configured_;
@@ -292,6 +296,7 @@ class RTPSender {
   const bool populate_network2_timestamp_;
 
   const bool send_side_bwe_with_overhead_;
+  const bool legacy_packet_history_storage_mode_;
 
   RTC_DISALLOW_IMPLICIT_CONSTRUCTORS(RTPSender);
 };

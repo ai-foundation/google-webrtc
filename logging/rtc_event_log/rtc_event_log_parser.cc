@@ -91,7 +91,7 @@ struct OverheadChangeEvent {
   uint16_t overhead;
 };
 std::vector<OverheadChangeEvent> GetOverheadChangingEvents(
-    const std::vector<LoggedRouteChangeEvent>& route_changes,
+    const std::vector<InferredRouteChangeEvent>& route_changes,
     PacketDirection direction) {
   std::vector<OverheadChangeEvent> overheads;
   for (auto& event : route_changes) {
@@ -1129,6 +1129,7 @@ bool ParsedRtcEventLog::ParseStream(
   first_timestamp_ = std::numeric_limits<int64_t>::max();
   last_timestamp_ = std::numeric_limits<int64_t>::min();
   StoreFirstAndLastTimestamp(alr_state_events());
+  StoreFirstAndLastTimestamp(route_change_events());
   for (const auto& audio_stream : audio_playout_events()) {
     // Audio playout events are grouped by SSRC.
     StoreFirstAndLastTimestamp(audio_stream.second);
@@ -1881,11 +1882,12 @@ ParsedRtcEventLog::MediaType ParsedRtcEventLog::GetMediaType(
   return MediaType::ANY;
 }
 
-std::vector<LoggedRouteChangeEvent> ParsedRtcEventLog::GetRouteChanges() const {
-  std::vector<LoggedRouteChangeEvent> route_changes;
+std::vector<InferredRouteChangeEvent> ParsedRtcEventLog::GetRouteChanges()
+    const {
+  std::vector<InferredRouteChangeEvent> route_changes;
   for (auto& candidate : ice_candidate_pair_configs()) {
     if (candidate.type == IceCandidatePairConfigType::kSelected) {
-      LoggedRouteChangeEvent route;
+      InferredRouteChangeEvent route;
       route.route_id = candidate.candidate_pair_id;
       route.log_time = Timestamp::ms(candidate.log_time_ms());
 
@@ -1933,6 +1935,13 @@ std::vector<LoggedPacketInfo> ParsedRtcEventLog::GetPacketInfos(
       current_overhead = overhead_iter->overhead;
       ++overhead_iter;
     }
+    // If we have a large time delta, it can be caused by a gap in logging,
+    // therefore we don't want to match up sequence numbers as we might have had
+    // a wraparound.
+    if (new_log_time - last_log_time > TimeDelta::seconds(30)) {
+      seq_num_unwrapper = SequenceNumberUnwrapper();
+      indices.clear();
+    }
     RTC_DCHECK(new_log_time >= last_log_time);
     last_log_time = new_log_time;
   };
@@ -1960,8 +1969,17 @@ std::vector<LoggedPacketInfo> ParsedRtcEventLog::GetPacketInfos(
     LoggedPacketInfo logged(rtp, stream->media_type, stream->rtx, capture_time);
     logged.overhead = current_overhead;
     if (logged.has_transport_seq_no) {
+      logged.log_feedback_time = Timestamp::PlusInfinity();
       int64_t unwrapped_seq_num =
           seq_num_unwrapper.Unwrap(logged.transport_seq_no);
+      if (indices.find(unwrapped_seq_num) != indices.end()) {
+        auto prev = packets[indices[unwrapped_seq_num]];
+        RTC_LOG(LS_WARNING)
+            << "Repeated sent packet sequence number: " << unwrapped_seq_num
+            << " Packet time:" << prev.log_packet_time.seconds() << "s vs "
+            << logged.log_packet_time.seconds()
+            << "s at:" << rtp.log_time_ms() / 1000;
+      }
       indices[unwrapped_seq_num] = packets.size();
     }
     packets.push_back(logged);
@@ -1987,16 +2005,15 @@ std::vector<LoggedPacketInfo> ParsedRtcEventLog::GetPacketInfos(
         last_feedback_base_time_us = feedback.GetBaseTimeUs();
 
         std::vector<LoggedPacketInfo*> packet_feedbacks;
-        packet_feedbacks.reserve(feedback.GetReceivedPackets().size());
+        packet_feedbacks.reserve(feedback.GetAllPackets().size());
         Timestamp receive_timestamp = feedback_base_time;
-        for (const auto& packet : feedback.GetReceivedPackets()) {
-          receive_timestamp += TimeDelta::us(packet.delta_us());
+        std::vector<int64_t> unknown_seq_nums;
+        for (const auto& packet : feedback.GetAllPackets()) {
           int64_t unwrapped_seq_num =
               seq_num_unwrapper.Unwrap(packet.sequence_number());
           auto it = indices.find(unwrapped_seq_num);
           if (it == indices.end()) {
-            RTC_LOG(LS_WARNING) << "Received feedback for unknown packet: "
-                                << unwrapped_seq_num;
+            unknown_seq_nums.push_back(unwrapped_seq_num);
             continue;
           }
           LoggedPacketInfo* sent = &packets[it->second];
@@ -2006,12 +2023,25 @@ std::vector<LoggedPacketInfo> ParsedRtcEventLog::GetPacketInfos(
                 << "Received very late feedback, possibly due to wraparound.";
             continue;
           }
-          // Ignore if we already received feedback for this packet.
-          if (sent->log_feedback_time.IsFinite())
-            continue;
-          sent->log_feedback_time = log_feedback_time;
-          sent->reported_recv_time = Timestamp::ms(receive_timestamp.ms());
+          if (packet.received()) {
+            receive_timestamp += TimeDelta::us(packet.delta_us());
+            if (sent->reported_recv_time.IsInfinite()) {
+              sent->reported_recv_time = Timestamp::ms(receive_timestamp.ms());
+              sent->log_feedback_time = log_feedback_time;
+            }
+          } else {
+            if (sent->reported_recv_time.IsInfinite() &&
+                sent->log_feedback_time.IsInfinite()) {
+              sent->reported_recv_time = Timestamp::PlusInfinity();
+              sent->log_feedback_time = log_feedback_time;
+            }
+          }
           packet_feedbacks.push_back(sent);
+        }
+        if (!unknown_seq_nums.empty()) {
+          RTC_LOG(LS_WARNING)
+              << "Received feedback for unknown packets: "
+              << unknown_seq_nums.front() << " - " << unknown_seq_nums.back();
         }
         if (packet_feedbacks.empty())
           return;
@@ -2117,7 +2147,7 @@ void ParsedRtcEventLog::StoreParsedNewFormatEvent(
           stream.audio_network_adaptations_size() +
           stream.probe_clusters_size() + stream.probe_success_size() +
           stream.probe_failure_size() + stream.alr_states_size() +
-          stream.ice_candidate_configs_size() +
+          stream.route_changes_size() + stream.ice_candidate_configs_size() +
           stream.ice_candidate_events_size() +
           stream.audio_recv_stream_configs_size() +
           stream.audio_send_stream_configs_size() +
@@ -2160,6 +2190,8 @@ void ParsedRtcEventLog::StoreParsedNewFormatEvent(
     StoreBweProbeFailureEvent(stream.probe_failure(0));
   } else if (stream.alr_states_size() == 1) {
     StoreAlrStateEvent(stream.alr_states(0));
+  } else if (stream.route_changes_size() == 1) {
+    StoreRouteChangeEvent(stream.route_changes(0));
   } else if (stream.ice_candidate_configs_size() == 1) {
     StoreIceCandidatePairConfig(stream.ice_candidate_configs(0));
   } else if (stream.ice_candidate_events_size() == 1) {
@@ -2191,6 +2223,20 @@ void ParsedRtcEventLog::StoreAlrStateEvent(const rtclog2::AlrState& proto) {
   alr_event.in_alr = proto.in_alr();
 
   alr_state_events_.push_back(alr_event);
+  // TODO(terelius): Should we delta encode this event type?
+}
+
+void ParsedRtcEventLog::StoreRouteChangeEvent(
+    const rtclog2::RouteChange& proto) {
+  RTC_CHECK(proto.has_timestamp_ms());
+  RTC_CHECK(proto.has_connected());
+  RTC_CHECK(proto.has_overhead());
+  LoggedRouteChangeEvent route_event;
+  route_event.timestamp_ms = proto.timestamp_ms();
+  route_event.connected = proto.connected();
+  route_event.overhead = proto.overhead();
+
+  route_change_events_.push_back(route_event);
   // TODO(terelius): Should we delta encode this event type?
 }
 

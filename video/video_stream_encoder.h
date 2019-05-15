@@ -30,13 +30,14 @@
 #include "modules/video_coding/video_coding_impl.h"
 #include "rtc_base/critical_section.h"
 #include "rtc_base/event.h"
+#include "rtc_base/experiments/balanced_degradation_settings.h"
 #include "rtc_base/experiments/rate_control_settings.h"
 #include "rtc_base/race_checker.h"
 #include "rtc_base/rate_statistics.h"
 #include "rtc_base/synchronization/sequence_checker.h"
 #include "rtc_base/task_queue.h"
 #include "video/encoder_bitrate_adjuster.h"
-#include "video/frame_encode_timer.h"
+#include "video/frame_encode_metadata_writer.h"
 #include "video/overuse_frame_detector.h"
 
 namespace webrtc {
@@ -281,6 +282,8 @@ class VideoStreamEncoder : public VideoStreamEncoderInterface,
   // Set depending on degradation preferences.
   DegradationPreference degradation_preference_ RTC_GUARDED_BY(&encoder_queue_);
 
+  BalancedDegradationSettings balanced_settings_;
+
   struct AdaptationRequest {
     // The pixel count produced by the source at the time of the adaptation.
     int input_pixel_count_;
@@ -342,7 +345,7 @@ class VideoStreamEncoder : public VideoStreamEncoderInterface,
   // turn this into a simple bool |pending_keyframe_request_|.
   std::vector<VideoFrameType> next_frame_types_ RTC_GUARDED_BY(&encoder_queue_);
 
-  FrameEncodeTimer frame_encoder_timer_;
+  FrameEncodeMetadataWriter frame_encode_metadata_writer_;
 
   // Experiment groups parsed from field trials for realtime video ([0]) and
   // screenshare ([1]). 0 means no group specified. Positive values are

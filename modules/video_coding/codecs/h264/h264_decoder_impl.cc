@@ -283,7 +283,7 @@ int32_t H264DecoderImpl::Decode(const EncodedImage& input_image,
   VideoFrame* input_frame =
       static_cast<VideoFrame*>(av_buffer_get_opaque(av_frame_->buf[0]));
   RTC_DCHECK(input_frame);
-  rtc::scoped_refptr<webrtc::I420BufferInterface> i420_buffer =
+  const webrtc::I420BufferInterface* i420_buffer =
       input_frame->video_frame_buffer()->GetI420();
   RTC_CHECK_EQ(av_frame_->data[kYPlaneIndex], i420_buffer->DataY());
   RTC_CHECK_EQ(av_frame_->data[kUPlaneIndex], i420_buffer->DataU());
@@ -299,6 +299,10 @@ int32_t H264DecoderImpl::Decode(const EncodedImage& input_image,
 
   rtc::scoped_refptr<VideoFrameBuffer> decoded_buffer;
 
+  // Pass on color space from input frame if explicitly specified.
+  const ColorSpace& color_space =
+      input_image.ColorSpace() ? *input_image.ColorSpace()
+                               : ExtractH264ColorSpace(av_context_.get());
   // 8-bit HDR is currently not being rendered correctly in Chrome on Windows.
   // If the ColorSpace transfer function is set to ST2084, convert the 8-bit
   // buffer to a 10-bit buffer. This way 8-bit HDR content is rendered correctly
@@ -306,8 +310,7 @@ int32_t H264DecoderImpl::Decode(const EncodedImage& input_image,
   // Chrome/WebRTC.
   // TODO(chromium:956468): Remove this code and fix the underlying problem.
   bool hdr_color_space =
-      input_image.ColorSpace() && input_image.ColorSpace()->transfer() ==
-                                      ColorSpace::TransferID::kSMPTEST2084;
+      color_space.transfer() == ColorSpace::TransferID::kSMPTEST2084;
   if (kEnable8bitHdrFix_ && hdr_color_space) {
     auto i010_buffer = I010Buffer::Copy(*i420_buffer);
     // Crop image, see comment below.
@@ -330,16 +333,11 @@ int32_t H264DecoderImpl::Decode(const EncodedImage& input_image,
     decoded_buffer = input_frame->video_frame_buffer();
   }
 
-  // Pass on color space from input frame if explicitly specified.
-  const ColorSpace& color_space =
-      input_image.ColorSpace() ? *input_image.ColorSpace()
-                               : ExtractH264ColorSpace(av_context_.get());
-
   VideoFrame decoded_frame = VideoFrame::Builder()
                                  .set_video_frame_buffer(decoded_buffer)
-                                 .set_timestamp_us(input_frame->timestamp_us())
                                  .set_timestamp_rtp(input_image.Timestamp())
-                                 .set_rotation(input_frame->rotation())
+                                 .set_rotation(input_image.rotation_)
+                                 .set_ntp_time_ms(input_image.ntp_time_ms_)
                                  .set_color_space(color_space)
                                  .build();
 

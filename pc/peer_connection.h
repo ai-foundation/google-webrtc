@@ -211,6 +211,7 @@ class PeerConnection : public PeerConnectionInternal,
                                        int64_t max_size_bytes) override;
   bool StartRtcEventLog(std::unique_ptr<RtcEventLogOutput> output,
                         int64_t output_period_ms) override;
+  bool StartRtcEventLog(std::unique_ptr<RtcEventLogOutput> output) override;
   void StopRtcEventLog() override;
 
   void Close() override;
@@ -878,7 +879,8 @@ class PeerConnection : public PeerConnectionInternal,
       RTC_RUN_ON(signaling_thread());
   bool PushdownSctpParameters_n(cricket::ContentSource source,
                                 int local_sctp_port,
-                                int remote_sctp_port);
+                                int remote_sctp_port,
+                                int max_message_size);
 
   RTCError PushdownTransportDescription(cricket::ContentSource source,
                                         SdpType type);

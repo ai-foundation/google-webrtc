@@ -392,6 +392,7 @@ class AudioProcessing : public rtc::RefCountInterface {
       kCapturePreGain,
       kCaptureCompressionGain,
       kCaptureFixedPostGain,
+      kPlayoutVolumeChange,
       kCustomRenderProcessingRuntimeSetting
     };
 
@@ -419,6 +420,10 @@ class AudioProcessing : public rtc::RefCountInterface {
       return {Type::kCaptureFixedPostGain, gain_db};
     }
 
+    static RuntimeSetting CreatePlayoutVolumeChange(int volume) {
+      return {Type::kPlayoutVolumeChange, volume};
+    }
+
     static RuntimeSetting CreateCustomRenderSetting(float payload) {
       return {Type::kCustomRenderProcessingRuntimeSetting, payload};
     }
@@ -426,13 +431,24 @@ class AudioProcessing : public rtc::RefCountInterface {
     Type type() const { return type_; }
     void GetFloat(float* value) const {
       RTC_DCHECK(value);
-      *value = value_;
+      *value = value_.float_value;
+    }
+    void GetInt(int* value) const {
+      RTC_DCHECK(value);
+      *value = value_.int_value;
     }
 
    private:
     RuntimeSetting(Type id, float value) : type_(id), value_(value) {}
+    RuntimeSetting(Type id, int value) : type_(id), value_(value) {}
     Type type_;
-    float value_;
+    union U {
+      U() {}
+      U(int value) : int_value(value) {}
+      U(float value) : float_value(value) {}
+      float float_value;
+      int int_value;
+    } value_;
   };
 
   ~AudioProcessing() override {}
@@ -630,6 +646,8 @@ class AudioProcessing : public rtc::RefCountInterface {
 
   // Use to send UMA histograms at end of a call. Note that all histogram
   // specific member variables are reset.
+  // Deprecated. This method is deprecated and will be removed.
+  // TODO(peah): Remove this method.
   virtual void UpdateHistogramsOnCallEnd() = 0;
 
   // Get audio processing statistics. The |has_remote_tracks| argument should be

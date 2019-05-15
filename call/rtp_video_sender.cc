@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "absl/memory/memory.h"
+#include "api/array_view.h"
 #include "api/transport/field_trial_based_config.h"
 #include "call/rtp_transport_controller_send_interface.h"
 #include "modules/pacing/packet_router.h"
@@ -48,10 +49,6 @@ RtpStreamSender::~RtpStreamSender() = default;
 
 namespace {
 static const int kMinSendSidePacketHistorySize = 600;
-// Assume an average video stream has around 3 packets per frame (1 mbps / 30
-// fps / 1400B) A sequence number set with size 5500 will be able to store
-// packet sequence number for at least last 60 seconds.
-static const int kSendSideSeqNumSetMaxSize = 5500;
 // We don't do MTU discovery, so assume that we have the standard ethernet MTU.
 static const size_t kPathMTU = 1500;
 
@@ -323,18 +320,14 @@ RtpVideoSender::RtpVideoSender(
 
   fec_controller_->SetProtectionCallback(this);
   // Signal congestion controller this object is ready for OnPacket* callbacks.
-  if (fec_controller_->UseLossVectorMask()) {
-    transport_->RegisterPacketFeedbackObserver(this);
-  }
+  transport_->RegisterPacketFeedbackObserver(this);
 }
 
 RtpVideoSender::~RtpVideoSender() {
   for (const RtpStreamSender& stream : rtp_streams_) {
     transport_->packet_router()->RemoveSendRtpModule(stream.rtp_rtcp.get());
   }
-  if (fec_controller_->UseLossVectorMask()) {
-    transport_->DeRegisterPacketFeedbackObserver(this);
-  }
+  transport_->DeRegisterPacketFeedbackObserver(this);
 }
 
 void RtpVideoSender::RegisterProcessThread(
@@ -567,6 +560,7 @@ void RtpVideoSender::DeliverRtcp(const uint8_t* packet, size_t length) {
 
 void RtpVideoSender::ConfigureSsrcs(const RtpConfig& rtp_config) {
   // Configure regular SSRCs.
+  RTC_CHECK(ssrc_to_acknowledged_packets_observers_.empty());
   for (size_t i = 0; i < rtp_config.ssrcs.size(); ++i) {
     uint32_t ssrc = rtp_config.ssrcs[i];
     RtpRtcp* const rtp_rtcp = rtp_streams_[i].rtp_rtcp.get();
@@ -576,6 +570,11 @@ void RtpVideoSender::ConfigureSsrcs(const RtpConfig& rtp_config) {
     auto it = suspended_ssrcs_.find(ssrc);
     if (it != suspended_ssrcs_.end())
       rtp_rtcp->SetRtpState(it->second);
+
+    AcknowledgedPacketsObserver* receive_observer =
+        rtp_rtcp->GetAcknowledgedPacketsObserver();
+    RTC_DCHECK(receive_observer != nullptr);
+    ssrc_to_acknowledged_packets_observers_[ssrc] = receive_observer;
   }
 
   // Set up RTX if available.
@@ -777,29 +776,45 @@ int RtpVideoSender::ProtectionRequest(const FecProtectionParams* delta_params,
   return 0;
 }
 
-void RtpVideoSender::OnPacketAdded(uint32_t ssrc, uint16_t seq_num) {
-  const auto ssrcs = rtp_config_.ssrcs;
-  if (std::find(ssrcs.begin(), ssrcs.end(), ssrc) != ssrcs.end()) {
-    feedback_packet_seq_num_set_.insert(seq_num);
-    if (feedback_packet_seq_num_set_.size() > kSendSideSeqNumSetMaxSize) {
-      RTC_LOG(LS_WARNING) << "Feedback packet sequence number set exceed it's "
-                             "max size', will get reset.";
-      feedback_packet_seq_num_set_.clear();
-    }
-  }
-}
-
 void RtpVideoSender::OnPacketFeedbackVector(
     const std::vector<PacketFeedback>& packet_feedback_vector) {
-  rtc::CritScope lock(&crit_);
-  // Lost feedbacks are not considered to be lost packets.
-  for (const PacketFeedback& packet : packet_feedback_vector) {
-    auto it = feedback_packet_seq_num_set_.find(packet.sequence_number);
-    if (it != feedback_packet_seq_num_set_.end()) {
-      const bool lost = packet.arrival_time_ms == PacketFeedback::kNotReceived;
-      loss_mask_vector_.push_back(lost);
-      feedback_packet_seq_num_set_.erase(it);
+  if (fec_controller_->UseLossVectorMask()) {
+    rtc::CritScope cs(&crit_);
+    for (const PacketFeedback& packet : packet_feedback_vector) {
+      if (packet.send_time_ms == PacketFeedback::kNoSendTime || !packet.ssrc ||
+          std::find(rtp_config_.ssrcs.begin(), rtp_config_.ssrcs.end(),
+                    *packet.ssrc) == rtp_config_.ssrcs.end()) {
+        // If packet send time is missing, the feedback for this packet has
+        // probably already been processed, so ignore it.
+        // If packet does not belong to a registered media ssrc, we are also
+        // not interested in it.
+        continue;
+      }
+      loss_mask_vector_.push_back(packet.arrival_time_ms ==
+                                  PacketFeedback::kNotReceived);
     }
+  }
+
+  // Map from SSRC to all acked packets for that RTP module.
+  std::map<uint32_t, std::vector<uint16_t>> acked_packets_per_ssrc;
+  for (const PacketFeedback& packet : packet_feedback_vector) {
+    if (packet.ssrc && packet.arrival_time_ms != PacketFeedback::kNotReceived) {
+      acked_packets_per_ssrc[*packet.ssrc].push_back(
+          packet.rtp_sequence_number);
+    }
+  }
+
+  for (const auto& kv : acked_packets_per_ssrc) {
+    const uint32_t ssrc = kv.first;
+    if (ssrc_to_acknowledged_packets_observers_.find(ssrc) ==
+        ssrc_to_acknowledged_packets_observers_.end()) {
+      // Packets not for a media SSRC, so likely RTX or FEC. If so, ignore
+      // since there's no RTP history to clean up anyway.
+      continue;
+    }
+    rtc::ArrayView<const uint16_t> rtp_sequence_numbers(kv.second);
+    ssrc_to_acknowledged_packets_observers_[ssrc]->OnPacketsAcknowledged(
+        rtp_sequence_numbers);
   }
 }
 
