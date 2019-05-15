@@ -83,6 +83,7 @@ gclient sync --nohooks --with_branch_heads # This can take quite a while
 
 # Generate the Xcode project files
 cd src
+git checkout aif
 gn gen out/ios_xcode --args='target_os="ios" target_cpu="arm64"' --ide=xcode
 open -a Xcode.app out/ios/all.xcworkspace
 ```
