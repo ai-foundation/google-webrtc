@@ -28,6 +28,7 @@
 @property(nonatomic, strong) RTCVideoTrack *remoteVideoTrack;
 @property(nonatomic, readonly) ARDVideoCallView *videoCallView;
 @property(nonatomic, assign) AVAudioSessionPortOverride portOverride;
+@property(nonatomic, strong) AVAudioPlayer *audioPlayer;
 @end
 
 @implementation ARDVideoCallViewController {
@@ -41,6 +42,7 @@
 @synthesize remoteVideoTrack = _remoteVideoTrack;
 @synthesize delegate = _delegate;
 @synthesize portOverride = _portOverride;
+@synthesize audioPlayer = _audioPlayer;
 
 - (instancetype)initForRoom:(NSString *)room
                  isLoopback:(BOOL)isLoopback
@@ -63,7 +65,20 @@
   self.view = _videoCallView;
 
   RTCAudioSession *session = [RTCAudioSession sharedInstance];
+  session.useManualAudio = YES;
+  
   [session addDelegate:self];
+  
+  
+  NSString *audioFilePath =
+  [[NSBundle mainBundle] pathForResource:@"mozart" ofType:@"mp3"];
+  NSURL *audioFileURL = [NSURL URLWithString:audioFilePath];
+  _audioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:audioFileURL
+                                                        error:nil];
+  _audioPlayer.numberOfLoops = -1;
+  _audioPlayer.volume = 1.0;
+  [_audioPlayer prepareToPlay];
+  
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
@@ -179,8 +194,17 @@
 }
 
 - (void)videoCallViewDidEnableStats:(ARDVideoCallView *)view {
-  _client.shouldGetStats = YES;
-  _videoCallView.statsView.hidden = NO;
+//  _client.shouldGetStats = YES;
+//  _videoCallView.statsView.hidden = NO;
+  if (_audioPlayer.playing) {
+    RTCLog(@"Stopping audio player");
+    [_audioPlayer stop];
+    [RTCAudioSession sharedInstance].isAudioEnabled = YES;
+  } else {
+    RTCLog(@"Starting audio player");
+    [RTCAudioSession sharedInstance].isAudioEnabled = NO;
+    [_audioPlayer play];
+  }
 }
 
 #pragma mark - RTCAudioSessionDelegate
