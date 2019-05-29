@@ -75,17 +75,17 @@ install_chromium_depot_tools
 ```bash
 # Get the code
 cd ~/Workspace
-mkdir google-webrtc
-cd google-webrtc
-gclient root
-gclient config --unmanaged --name=src --deps-file=DEPS git@github.com:ai-foundation/google-webrtc.git
-gclient sync --nohooks --with_branch_heads # This can take quite a while
+mkdir google_webrtc_ios
+cd google_webrtc_ios
+fetch --nohooks webrtc_ios
+gclient sync
+cd src
+git remote add aif git@github.com:ai-foundation/google-webrtc
+git checkout aif aif
 
 # Generate the Xcode project files
-cd src
-git checkout aif
-gn gen out/ios_xcode --args='target_os="ios" target_cpu="arm64"' --ide=xcode
-open -a Xcode.app out/ios_xcode/all.xcworkspace
+gn gen out/ios --args='target_os="ios" target_cpu="arm64"' --ide=xcode
+open -a Xcode.app out/ios/all.xcworkspace
 ```
 
 
