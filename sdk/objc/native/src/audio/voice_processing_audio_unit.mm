@@ -91,7 +91,8 @@ bool VoiceProcessingAudioUnit::Init() {
   // I/O audio unit.
   AudioComponentDescription vpio_unit_description;
   vpio_unit_description.componentType = kAudioUnitType_Output;
-  vpio_unit_description.componentSubType = kAudioUnitSubType_VoiceProcessingIO;
+  // Hack to fix AVPlayer volume issue. Should be kAudioUnitSubType_VoiceProcessingIO
+  vpio_unit_description.componentSubType = kAudioUnitSubType_RemoteIO;
   vpio_unit_description.componentManufacturer = kAudioUnitManufacturer_Apple;
   vpio_unit_description.componentFlags = 0;
   vpio_unit_description.componentFlagsMask = 0;
