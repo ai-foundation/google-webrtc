@@ -28,7 +28,9 @@
 @property(nonatomic) RTCCameraPreviewView *localVideoView;
 @property(nonatomic) __kindof UIView<RTCVideoRenderer> *remoteVideoView;
 @property(nonatomic) UIButton *callButton;
+@property(nonatomic) UIButton *soundButton;
 @property(nonatomic) UIButton *hangUpButton;
+@property(nonatomic) AVPlayer *avPlayer;
 
 @end
 
@@ -42,7 +44,9 @@
 @synthesize localVideoView = _localVideoView;
 @synthesize remoteVideoView = _remoteVideoView;
 @synthesize callButton = _callButton;
+@synthesize soundButton = _soundButton;
 @synthesize hangUpButton = _hangUpButton;
+@synthesize avPlayer = _avPlayer;
 
 #pragma mark - View controller lifecycle
 
@@ -66,6 +70,12 @@
   [_callButton setTitle:@"Call" forState:UIControlStateNormal];
   [_callButton addTarget:self action:@selector(call:) forControlEvents:UIControlEventTouchUpInside];
   [_view addSubview:_callButton];
+  
+  _soundButton = [UIButton buttonWithType:UIButtonTypeSystem];
+  _soundButton.translatesAutoresizingMaskIntoConstraints = NO;
+  [_soundButton setTitle:@"Sound" forState:UIControlStateNormal];
+  [_soundButton addTarget:self action:@selector(playSound:) forControlEvents:UIControlEventTouchUpInside];
+  [_view addSubview:_soundButton];
 
   _hangUpButton = [UIButton buttonWithType:UIButtonTypeSystem];
   _hangUpButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -92,6 +102,12 @@
   [_callButton.bottomAnchor constraintEqualToAnchor:margin.bottomAnchor constant:8.0].active = YES;
   [_callButton.widthAnchor constraintEqualToConstant:100].active = YES;
   [_callButton.heightAnchor constraintEqualToConstant:40].active = YES;
+  
+  [_soundButton.centerXAnchor constraintEqualToAnchor:margin.centerXAnchor constant:0.0].active =
+  YES;
+  [_soundButton.bottomAnchor constraintEqualToAnchor:margin.bottomAnchor constant:8.0].active = YES;
+  [_soundButton.widthAnchor constraintEqualToConstant:100].active = YES;
+  [_soundButton.heightAnchor constraintEqualToConstant:40].active = YES;
 
   [_hangUpButton.trailingAnchor constraintEqualToAnchor:margin.trailingAnchor constant:8.0].active =
       YES;
@@ -149,12 +165,29 @@
 
 #pragma mark - Actions
 
-- (IBAction)call:(id)sender {
+- (void)call:(id)sender {
   _call_client->Call(self.capturer, self.remoteVideoView);
 }
 
-- (IBAction)hangUp:(id)sender {
+- (void)hangUp:(id)sender {
   _call_client->Hangup();
+}
+
+- (void)playSound:(id)sender {
+  NSArray<NSURL *> *urls = [[NSBundle mainBundle] URLsForResourcesWithExtension:@".mp3" subdirectory:@""];
+  
+  NSLog(@"%lu URLs found", [urls count]);
+  
+  for (NSUInteger i = 0; i < [urls count]; i++) {
+    NSLog(@"URL %lu %@", i, urls[i].absoluteString);
+  }
+  
+  if ([urls count] > 0) {
+    NSURL *url = urls[(int)floor(rand() / RAND_MAX * [urls count])];
+    NSLog(@"Chose URL %@", url.absoluteString);
+    _avPlayer = [[AVPlayer alloc] initWithURL:url];
+    [_avPlayer play];
+  }
 }
 
 @end
